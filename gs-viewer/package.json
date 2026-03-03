@@ -1,5 +1,5 @@
 {
-  "name": "file-loader",
+  "name": "gs-viewer",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -9,10 +9,7 @@
     "preview": "vite preview"
   },
   "devDependencies": {
-    "typescript": "^5.8.3",
-    "vite": "^7.0.4"
-  },
-  "dependencies": {
-    "gsplat": "^1.2.9"
+    "typescript": "~5.9.3",
+    "vite": "^7.3.1"
   }
 }

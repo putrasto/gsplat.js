@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>gsplat.js - PLY File Manager</title>
+    </head>
+    <body>
+        <div class="layout">
+            <aside class="sidebar">
+                <h1>PLY File Manager</h1>
+                <p class="subtitle">Upload, describe, and render .ply files.</p>
+
+                <div class="actions">
+                    <button id="add-files-button" type="button">Add .ply Files</button>
+                    <button id="delete-file-button" type="button" disabled>Delete Selected</button>
+                    <button id="auto-position-button" type="button" disabled>Auto Position</button>
+                    <button id="orbit-side-button" type="button" disabled>Orbit: Top</button>
+                    <button id="camera-aid-button" type="button">Camera Aid: On</button>
+                    <button id="centroid-axes-button" type="button" disabled>Centroid Axes: On</button>
+                </div>
+
+                <input id="file-input" type="file" accept=".ply" multiple hidden />
+                <p class="hint">You can also drag and drop .ply files anywhere in this page.</p>
+
+                <ul id="file-list" class="file-list"></ul>
+
+                <label for="description-input" class="description-label">Short Description</label>
+                <input
+                    id="description-input"
+                    class="description-input"
+                    type="text"
+                    maxlength="64"
+                    placeholder="Select a file first"
+                    disabled
+                />
+
+                <p id="status-text" class="status-text">No file selected.</p>
+                <progress id="load-progress" value="0" max="100"></progress>
+            </aside>
+
+            <main id="viewer" class="viewer"></main>
+        </div>
+
+        <script type="module" src="/src/main.ts"></script>
+    </body>
+</html>

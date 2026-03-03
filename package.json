@@ -58,5 +58,8 @@
     },
     "files": [
         "dist/**/*"
-    ]
+    ],
+    "dependencies": {
+        "gsplat": "^1.2.9"
+    }
 }

@@ -1,0 +1,23 @@
+{
+  "name": "ply-file-manager",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev:client": "vite",
+    "dev:server": "bun --watch server/index.ts",
+    "dev": "trap 'kill 0' EXIT; bun run dev:server & bun run dev:client",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && vite build",
+    "start": "NODE_ENV=production bun server/index.ts",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "bun-types": "^1.3.10",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.4"
+  },
+  "dependencies": {
+    "gsplat": "^1.2.9",
+    "hono": "^4.12.3"
+  }
+}
