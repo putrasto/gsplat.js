@@ -21,8 +21,7 @@ const fileList = document.getElementById("file-list") as HTMLUListElement;
 const descriptionInput = document.getElementById("description-input") as HTMLInputElement;
 const statusText = document.getElementById("status-text") as HTMLParagraphElement;
 const loadProgress = document.getElementById("load-progress") as HTMLProgressElement;
-const fovXInput = document.getElementById("fovx-input") as HTMLInputElement;
-const fovYInput = document.getElementById("fovy-input") as HTMLInputElement;
+const fovInput = document.getElementById("fov-input") as HTMLInputElement;
 
 const renderer = new SPLAT.WebGLRenderer();
 viewer.appendChild(renderer.canvas);
@@ -69,10 +68,43 @@ let showCentroidAxes = DEFAULT_UI_SETTINGS.centroidAxes;
 let currentOrbitTarget: SPLAT.Vector3 | null = null;
 let currentAidAxisLength = 1;
 let perFileUiSettings: Record<string, PerFileUiSettings> = loadPerFileUiSettings();
-let fovXDeg = focalPixelsToFovDeg(camera.data.fx, camera.data.width);
-let fovYDeg = focalPixelsToFovDeg(camera.data.fy, camera.data.height);
+let fovDeg = focalPixelsToFovDeg(camera.data.fy, camera.data.height);
 
 let descriptionTimer: ReturnType<typeof setTimeout> | null = null;
+
+function isEditableTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    if (target.isContentEditable) return true;
+    const tag = target.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
+function setupDiamondKeyMapping(): void {
+    const remapXToBackward = (event: KeyboardEvent) => {
+        if (event.code !== "KeyX") return;
+        if (isEditableTarget(event.target)) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const aliased = new KeyboardEvent(event.type, {
+            code: "KeyS",
+            key: "s",
+            repeat: event.repeat,
+            altKey: event.altKey,
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+            shiftKey: event.shiftKey,
+            bubbles: true,
+            cancelable: true,
+        });
+        window.dispatchEvent(aliased);
+    };
+
+    // Capture phase remap so OrbitControls receives KeyS-equivalent from X.
+    window.addEventListener("keydown", remapXToBackward, true);
+    window.addEventListener("keyup", remapXToBackward, true);
+}
 
 function setStatus(message: string): void {
     statusText.textContent = message;
@@ -103,32 +135,27 @@ function getRenderSize(): { width: number; height: number } {
 }
 
 function applyCurrentFovToCamera(): void {
-    const { width, height } = getRenderSize();
-    camera.data.fx = fovDegToFocalPixels(fovXDeg, width);
-    camera.data.fy = fovDegToFocalPixels(fovYDeg, height);
+    const { height } = getRenderSize();
+    const focal = fovDegToFocalPixels(fovDeg, height);
+    // Keep a single focal length to avoid non-uniform scaling distortion.
+    camera.data.fx = focal;
+    camera.data.fy = focal;
     camera.update();
 }
 
-function syncFovInputs(): void {
-    fovXInput.value = fovXDeg.toFixed(2);
-    fovYInput.value = fovYDeg.toFixed(2);
+function syncFovInput(): void {
+    fovInput.value = fovDeg.toFixed(2);
 }
 
-function commitFovInput(axis: "x" | "y"): void {
-    const input = axis === "x" ? fovXInput : fovYInput;
-    const parsed = Number.parseFloat(input.value);
+function commitFovInput(): void {
+    const parsed = Number.parseFloat(fovInput.value);
     if (!Number.isFinite(parsed)) {
-        syncFovInputs();
+        syncFovInput();
         return;
     }
 
-    if (axis === "x") {
-        fovXDeg = clampFovDeg(parsed);
-    } else {
-        fovYDeg = clampFovDeg(parsed);
-    }
-
-    syncFovInputs();
+    fovDeg = clampFovDeg(parsed);
+    syncFovInput();
     applyCurrentFovToCamera();
     drawCameraAid();
 }
@@ -797,10 +824,11 @@ function handleResize(): void {
 }
 
 async function main(): Promise<void> {
+    setupDiamondKeyMapping();
     updateOrbitSideButtonLabel();
     updateCameraAidButtonLabel();
     updateCentroidAxesButtonLabel();
-    syncFovInputs();
+    syncFovInput();
     handleResize();
     drawCameraAid();
     window.addEventListener("resize", handleResize);
@@ -873,17 +901,11 @@ async function main(): Promise<void> {
         drawCameraAid();
     });
 
-    fovXInput.addEventListener("change", () => {
-        commitFovInput("x");
+    fovInput.addEventListener("change", () => {
+        commitFovInput();
     });
-    fovYInput.addEventListener("change", () => {
-        commitFovInput("y");
-    });
-    fovXInput.addEventListener("blur", () => {
-        commitFovInput("x");
-    });
-    fovYInput.addEventListener("blur", () => {
-        commitFovInput("y");
+    fovInput.addEventListener("blur", () => {
+        commitFovInput();
     });
 
     descriptionInput.addEventListener("input", () => {
