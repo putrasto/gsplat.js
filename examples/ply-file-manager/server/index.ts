@@ -120,11 +120,13 @@ if (process.env.NODE_ENV === "production") {
     app.get("/*", serveStatic({ root: distPath, path: "index.html" }));
 }
 
+const host = process.env.HOST || "0.0.0.0";
 const port = parseInt(process.env.PORT || "3001");
-console.log(`Hono server running on http://localhost:${port}`);
+console.log(`Hono server running on http://${host}:${port}`);
 console.log(`SQLite DB path: ${DB_PATH}`);
 
 export default {
+    hostname: host,
     port,
     fetch: app.fetch,
 };
