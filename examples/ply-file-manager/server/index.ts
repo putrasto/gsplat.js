@@ -122,11 +122,19 @@ if (process.env.NODE_ENV === "production") {
 
 const host = process.env.HOST || "0.0.0.0";
 const port = parseInt(process.env.PORT || "3001");
+const defaultMaxRequestBodySize = 10 * 1024 * 1024 * 1024; // 10 GiB
+const configuredMaxRequestBodySize = parseInt(process.env.MAX_REQUEST_BODY_SIZE || "", 10);
+const maxRequestBodySize = Number.isFinite(configuredMaxRequestBodySize) && configuredMaxRequestBodySize > 0
+    ? configuredMaxRequestBodySize
+    : defaultMaxRequestBodySize;
+
 console.log(`Hono server running on http://${host}:${port}`);
 console.log(`SQLite DB path: ${DB_PATH}`);
+console.log(`Max request body size: ${(maxRequestBodySize / (1024 * 1024)).toFixed(0)} MiB`);
 
 export default {
     hostname: host,
     port,
+    maxRequestBodySize,
     fetch: app.fetch,
 };
