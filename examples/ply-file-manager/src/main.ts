@@ -563,7 +563,7 @@ function autoPositionCurrentSplat(): void {
     updateActionButtons();
 }
 
-async function renderSelectedFile(): Promise<void> {
+async function renderSelectedFile(autoPositionAfterLoad = false): Promise<void> {
     const selectedFile = getSelectedFile();
     if (selectedFile === undefined) {
         currentSplat = null;
@@ -605,13 +605,16 @@ async function renderSelectedFile(): Promise<void> {
             plyFormat,
         );
 
-        // Default render is "as is". Auto transform is optional via button.
         currentSplat = splat;
-        const center = splat.bounds.center();
-        fitCameraToSplat(splat, center, "default");
+        if (autoPositionAfterLoad) {
+            autoPositionCurrentSplat();
+        } else {
+            // Default render is "as is". Auto transform is optional via button.
+            const center = splat.bounds.center();
+            fitCameraToSplat(splat, center, "default");
+            setStatus(`Loaded ${selectedFile.filename}`);
+        }
         updateActionButtons();
-
-        setStatus(`Loaded ${selectedFile.filename}`);
     } catch (error) {
         console.error(error);
         currentSplat = null;
@@ -646,7 +649,7 @@ async function selectAndRender(id: string): Promise<void> {
         renderFileList();
     }
 
-    await renderSelectedFile();
+    await renderSelectedFile(true);
 }
 
 async function addFiles(files: File[]): Promise<void> {
@@ -754,11 +757,13 @@ async function main(): Promise<void> {
     try {
         managedFiles = await fetchFiles();
         if (managedFiles.length > 0) {
-            selectedId = managedFiles[0].id;
-            applyPerFileUiSettings(selectedId);
+            selectedId = null;
+            applyPerFileUiSettings(null);
             updateDescriptionEditor();
             renderFileList();
-            void renderSelectedFile();
+            scene.reset();
+            loadProgress.value = 0;
+            setStatus("No file selected.");
         } else {
             applyPerFileUiSettings(null);
             renderFileList();
