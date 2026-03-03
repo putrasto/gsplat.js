@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { join, resolve, relative } from "path";
 import { unlinkSync, existsSync } from "fs";
-import { plyDb, UPLOADS_DIR, type PlyFileRow } from "./db";
+import { DB_PATH, plyDb, UPLOADS_DIR, type PlyFileRow } from "./db";
 
 const app = new Hono();
 
@@ -122,6 +122,7 @@ if (process.env.NODE_ENV === "production") {
 
 const port = parseInt(process.env.PORT || "3001");
 console.log(`Hono server running on http://localhost:${port}`);
+console.log(`SQLite DB path: ${DB_PATH}`);
 
 export default {
     port,

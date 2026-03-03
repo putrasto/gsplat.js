@@ -1,15 +1,33 @@
 import { Database } from "bun:sqlite";
+import { homedir } from "os";
 import { mkdirSync } from "fs";
-import { join } from "path";
+import { dirname, join, resolve } from "path";
 
-const DATA_DIR = join(import.meta.dir, "..", "data");
-const UPLOADS_DIR = join(import.meta.dir, "..", "uploads");
+function expandHome(pathValue: string): string {
+    if (pathValue === "~") return homedir();
+    if (pathValue.startsWith("~/")) return join(homedir(), pathValue.slice(2));
+    return pathValue;
+}
+
+const DEFAULT_DATA_DIR = join(homedir(), ".ply-file-manager", "data");
+const DEFAULT_UPLOADS_DIR = join(import.meta.dir, "..", "uploads");
+const DATA_DIR = resolve(expandHome(process.env.PLY_MANAGER_DATA_DIR ?? DEFAULT_DATA_DIR));
+const UPLOADS_DIR = resolve(expandHome(process.env.PLY_MANAGER_UPLOADS_DIR ?? DEFAULT_UPLOADS_DIR));
+const DB_PATH = resolve(expandHome(process.env.PLY_MANAGER_DB_PATH ?? join(DATA_DIR, "ply-manager.db")));
 
 mkdirSync(DATA_DIR, { recursive: true });
 mkdirSync(UPLOADS_DIR, { recursive: true });
+mkdirSync(dirname(DB_PATH), { recursive: true });
 
-const db = new Database(join(DATA_DIR, "ply-manager.db"));
-db.exec("PRAGMA journal_mode = WAL;");
+const db = new Database(DB_PATH);
+try {
+    db.exec("PRAGMA journal_mode = WAL;");
+} catch (error) {
+    console.warn(
+        `Failed to enable WAL mode for SQLite at ${DB_PATH}. Continuing with default journal mode.`,
+        error,
+    );
+}
 
 db.exec(`
     CREATE TABLE IF NOT EXISTS ply_files (
@@ -63,4 +81,4 @@ export const plyDb = {
     remove: (id: string) => remove.run(id),
 };
 
-export { UPLOADS_DIR };
+export { UPLOADS_DIR, DB_PATH };
