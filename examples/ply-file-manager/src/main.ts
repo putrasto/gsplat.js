@@ -21,6 +21,8 @@ const fileList = document.getElementById("file-list") as HTMLUListElement;
 const descriptionInput = document.getElementById("description-input") as HTMLInputElement;
 const statusText = document.getElementById("status-text") as HTMLParagraphElement;
 const loadProgress = document.getElementById("load-progress") as HTMLProgressElement;
+const fovXInput = document.getElementById("fovx-input") as HTMLInputElement;
+const fovYInput = document.getElementById("fovy-input") as HTMLInputElement;
 
 const renderer = new SPLAT.WebGLRenderer();
 viewer.appendChild(renderer.canvas);
@@ -67,11 +69,68 @@ let showCentroidAxes = DEFAULT_UI_SETTINGS.centroidAxes;
 let currentOrbitTarget: SPLAT.Vector3 | null = null;
 let currentAidAxisLength = 1;
 let perFileUiSettings: Record<string, PerFileUiSettings> = loadPerFileUiSettings();
+let fovXDeg = focalPixelsToFovDeg(camera.data.fx, camera.data.width);
+let fovYDeg = focalPixelsToFovDeg(camera.data.fy, camera.data.height);
 
 let descriptionTimer: ReturnType<typeof setTimeout> | null = null;
 
 function setStatus(message: string): void {
     statusText.textContent = message;
+}
+
+function clampFovDeg(value: number): number {
+    return Math.min(Math.max(value, 1), 179);
+}
+
+function focalPixelsToFovDeg(focalPixels: number, imagePixels: number): number {
+    const focal = Math.max(focalPixels, 1e-6);
+    const imageSize = Math.max(imagePixels, 1);
+    const fovRad = 2 * Math.atan(imageSize / (2 * focal));
+    return clampFovDeg((fovRad * 180) / Math.PI);
+}
+
+function fovDegToFocalPixels(fovDeg: number, imagePixels: number): number {
+    const clampedFov = clampFovDeg(fovDeg);
+    const halfAngle = (clampedFov * Math.PI) / 360;
+    const imageSize = Math.max(imagePixels, 1);
+    return imageSize / (2 * Math.tan(halfAngle));
+}
+
+function getRenderSize(): { width: number; height: number } {
+    const width = Math.max(1, renderer.canvas.width || viewer.clientWidth || camera.data.width);
+    const height = Math.max(1, renderer.canvas.height || viewer.clientHeight || camera.data.height);
+    return { width, height };
+}
+
+function applyCurrentFovToCamera(): void {
+    const { width, height } = getRenderSize();
+    camera.data.fx = fovDegToFocalPixels(fovXDeg, width);
+    camera.data.fy = fovDegToFocalPixels(fovYDeg, height);
+    camera.update();
+}
+
+function syncFovInputs(): void {
+    fovXInput.value = fovXDeg.toFixed(2);
+    fovYInput.value = fovYDeg.toFixed(2);
+}
+
+function commitFovInput(axis: "x" | "y"): void {
+    const input = axis === "x" ? fovXInput : fovYInput;
+    const parsed = Number.parseFloat(input.value);
+    if (!Number.isFinite(parsed)) {
+        syncFovInputs();
+        return;
+    }
+
+    if (axis === "x") {
+        fovXDeg = clampFovDeg(parsed);
+    } else {
+        fovYDeg = clampFovDeg(parsed);
+    }
+
+    syncFovInputs();
+    applyCurrentFovToCamera();
+    drawCameraAid();
 }
 
 function getFileById(id: string | null): PlyFileMeta | undefined {
@@ -734,12 +793,14 @@ async function deleteSelectedFile(): Promise<void> {
 
 function handleResize(): void {
     renderer.setSize(viewer.clientWidth, viewer.clientHeight);
+    applyCurrentFovToCamera();
 }
 
 async function main(): Promise<void> {
     updateOrbitSideButtonLabel();
     updateCameraAidButtonLabel();
     updateCentroidAxesButtonLabel();
+    syncFovInputs();
     handleResize();
     drawCameraAid();
     window.addEventListener("resize", handleResize);
@@ -810,6 +871,19 @@ async function main(): Promise<void> {
         persistSelectedFileUiSettings();
         updateCentroidAxesButtonLabel();
         drawCameraAid();
+    });
+
+    fovXInput.addEventListener("change", () => {
+        commitFovInput("x");
+    });
+    fovYInput.addEventListener("change", () => {
+        commitFovInput("y");
+    });
+    fovXInput.addEventListener("blur", () => {
+        commitFovInput("x");
+    });
+    fovYInput.addEventListener("blur", () => {
+        commitFovInput("y");
     });
 
     descriptionInput.addEventListener("input", () => {

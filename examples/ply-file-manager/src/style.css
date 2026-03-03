@@ -72,6 +72,30 @@ body {
     opacity: 0.5;
 }
 
+.fov-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.fov-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.fov-field label {
+    font-size: 0.75rem;
+    color: #334155;
+}
+
+.fov-field input {
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 0.85rem;
+}
+
 .hint {
     margin: 0;
     font-size: 0.78rem;
