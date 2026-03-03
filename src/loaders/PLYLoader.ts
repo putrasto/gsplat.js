@@ -94,6 +94,17 @@ class PLYLoader {
             rowOffset += offsets[type];
         }
 
+        const hasAdditionalSH = properties.some((property) => {
+            if (property.name.startsWith("f_rest_")) return true;
+            if (!property.name.startsWith("features_")) return false;
+            return !["features_0", "features_1", "features_2"].includes(property.name);
+        });
+        if (hasAdditionalSH) {
+            console.warn(
+                "PLY contains SH coefficients beyond DC (e.g. f_rest_*). gsplat.js currently uses only DC color, so view-dependent color will be lost.",
+            );
+        }
+
         const dataView = new DataView(inputBuffer, header_end_index + header_end.length);
         const buffer = new ArrayBuffer(SplatData.RowLength * vertexCount);
 
@@ -116,8 +127,23 @@ class PLYLoader {
                     case "float":
                         value = dataView.getFloat32(property.offset + i * rowOffset, true);
                         break;
+                    case "double":
+                        value = dataView.getFloat64(property.offset + i * rowOffset, true);
+                        break;
                     case "int":
                         value = dataView.getInt32(property.offset + i * rowOffset, true);
+                        break;
+                    case "uint":
+                        value = dataView.getUint32(property.offset + i * rowOffset, true);
+                        break;
+                    case "short":
+                        value = dataView.getInt16(property.offset + i * rowOffset, true);
+                        break;
+                    case "ushort":
+                        value = dataView.getUint16(property.offset + i * rowOffset, true);
+                        break;
+                    case "uchar":
+                        value = dataView.getUint8(property.offset + i * rowOffset);
                         break;
                     default:
                         throw new Error(`Unsupported property type: ${property.type}`);

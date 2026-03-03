@@ -89,7 +89,19 @@ body {
     color: #334155;
 }
 
-.fov-field input {
+.fov-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.fov-row input[type="range"] {
+    flex: 1;
+    min-width: 0;
+}
+
+.fov-row input[type="number"] {
+    width: 70px;
     border: 1px solid #cbd5e1;
     border-radius: 6px;
     padding: 6px 8px;

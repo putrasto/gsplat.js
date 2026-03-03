@@ -1,4 +1,4 @@
-import * as SPLAT from "gsplat";
+import * as pc from "playcanvas";
 import "./style.css";
 import {
     type PlyFileMeta,
@@ -22,25 +22,34 @@ const descriptionInput = document.getElementById("description-input") as HTMLInp
 const statusText = document.getElementById("status-text") as HTMLParagraphElement;
 const loadProgress = document.getElementById("load-progress") as HTMLProgressElement;
 const fovInput = document.getElementById("fov-input") as HTMLInputElement;
+const fovSlider = document.getElementById("fov-slider") as HTMLInputElement;
 
-const renderer = new SPLAT.WebGLRenderer();
-viewer.appendChild(renderer.canvas);
+const viewerCanvas = document.createElement("canvas");
+viewer.appendChild(viewerCanvas);
+
+const app = new pc.Application(viewerCanvas, {
+    mouse: new pc.Mouse(viewerCanvas),
+    keyboard: new pc.Keyboard(window),
+});
+app.start();
+app.setCanvasFillMode(pc.FILLMODE_NONE);
+app.setCanvasResolution(pc.RESOLUTION_AUTO);
+
+const cameraEntity = new pc.Entity("camera");
+cameraEntity.addComponent("camera", {
+    clearColor: new pc.Color(0.04, 0.05, 0.08),
+    nearClip: 0.01,
+    farClip: 2000,
+    fov: 60,
+});
+app.root.addChild(cameraEntity);
+const cameraComponent = cameraEntity.camera as pc.CameraComponent;
+
 const cameraAidCanvas = document.createElement("canvas");
 cameraAidCanvas.className = "camera-aid-overlay";
 viewer.appendChild(cameraAidCanvas);
 const cameraAidCtx = cameraAidCanvas.getContext("2d");
 
-const scene = new SPLAT.Scene();
-const camera = new SPLAT.Camera();
-let controls = new SPLAT.OrbitControls(camera, renderer.canvas);
-// Nerfstudio/viser-style axis remap for splats:
-// (x, y, z) -> (x, -z, y), equivalent to +90 deg around X.
-const viserWorldToThreeRotation = SPLAT.Quaternion.FromAxisAngle(
-    new SPLAT.Vector3(1, 0, 0),
-    Math.PI / 2,
-);
-const viserOrbitAlpha = (3 * Math.PI) / 4;
-const viserOrbitBetaMagnitude = Math.atan(1 / Math.sqrt(2));
 const PER_FILE_UI_SETTINGS_KEY = "ply-file-manager:per-file-ui-settings:v1";
 const DEFAULT_UI_SETTINGS: { orbitTop: boolean; cameraAid: boolean; centroidAxes: boolean } = {
     orbitTop: true,
@@ -48,103 +57,175 @@ const DEFAULT_UI_SETTINGS: { orbitTop: boolean; cameraAid: boolean; centroidAxes
     centroidAxes: true,
 };
 
+const VISER_WORLD_ROTATION = new pc.Quat().setFromEulerAngles(-90, 0, 0);
+const VISER_ORBIT_YAW_DEG = 135;
+const VISER_ORBIT_PITCH_DEG = Math.atan(1 / Math.sqrt(2)) * 180 / Math.PI;
+
+const tempVecA = new pc.Vec3();
+const tempVecB = new pc.Vec3();
+const tempScreen = new pc.Vec3();
+
 type PerFileUiSettings = {
     orbitTop?: boolean;
     cameraAid?: boolean;
     centroidAxes?: boolean;
 };
 
-let managedFiles: PlyFileMeta[] = [];
-const plyFormat = "";
+type LoadedSplat = {
+    asset: pc.Asset;
+    entity: pc.Entity;
+    gsplatData: pc.GSplatData;
+    aabb: pc.BoundingBox;
+    objectUrl: string | null;
+};
 
+type InlierStats = {
+    count: number;
+    sumX: number;
+    sumY: number;
+    sumZ: number;
+    minX: number;
+    minY: number;
+    minZ: number;
+    maxX: number;
+    maxY: number;
+    maxZ: number;
+};
+
+class SimpleOrbitControls {
+    private readonly cameraEntity: pc.Entity;
+    private readonly canvas: HTMLCanvasElement;
+
+    private target = new pc.Vec3();
+    private distance = 3;
+    private yawDeg = 135;
+    private pitchDeg = 20;
+
+    private dragButton: 0 | 1 | 2 | null = null;
+    private lastX = 0;
+    private lastY = 0;
+
+    constructor(cameraEntity: pc.Entity, canvas: HTMLCanvasElement) {
+        this.cameraEntity = cameraEntity;
+        this.canvas = canvas;
+
+        this.canvas.addEventListener("contextmenu", (event) => {
+            event.preventDefault();
+        });
+
+        this.canvas.addEventListener("mousedown", (event) => {
+            this.dragButton = (event.button === 0 || event.button === 1 || event.button === 2)
+                ? (event.button as 0 | 1 | 2)
+                : null;
+            this.lastX = event.clientX;
+            this.lastY = event.clientY;
+        });
+
+        window.addEventListener("mousemove", (event) => {
+            if (this.dragButton === null) return;
+
+            const dx = event.clientX - this.lastX;
+            const dy = event.clientY - this.lastY;
+            this.lastX = event.clientX;
+            this.lastY = event.clientY;
+
+            if (this.dragButton === 0) {
+                this.yawDeg -= dx * 0.28;
+                this.pitchDeg -= dy * 0.22;
+                this.pitchDeg = Math.max(-89.5, Math.min(89.5, this.pitchDeg));
+                return;
+            }
+
+            const panScale = Math.max(this.distance * 0.0015, 0.00005);
+            const right = this.cameraEntity.right.clone().mulScalar(-dx * panScale);
+            const up = this.cameraEntity.up.clone().mulScalar(dy * panScale);
+            this.target.add(right).add(up);
+        });
+
+        window.addEventListener("mouseup", () => {
+            this.dragButton = null;
+        });
+
+        this.canvas.addEventListener(
+            "wheel",
+            (event) => {
+                event.preventDefault();
+                const factor = Math.exp(event.deltaY * 0.0012);
+                this.distance *= factor;
+                this.distance = Math.max(0.03, Math.min(5000, this.distance));
+            },
+            { passive: false },
+        );
+    }
+
+    setPose(target: pc.Vec3, distance: number, yawDeg: number, pitchDeg: number): void {
+        this.target.copy(target);
+        this.distance = Math.max(0.03, distance);
+        this.yawDeg = yawDeg;
+        this.pitchDeg = Math.max(-89.5, Math.min(89.5, pitchDeg));
+        this.update();
+    }
+
+    update(): void {
+        const yawRad = this.yawDeg * Math.PI / 180;
+        const pitchRad = this.pitchDeg * Math.PI / 180;
+
+        const cosPitch = Math.cos(pitchRad);
+        const x = this.target.x + this.distance * cosPitch * Math.sin(yawRad);
+        const y = this.target.y + this.distance * Math.sin(pitchRad);
+        const z = this.target.z + this.distance * cosPitch * Math.cos(yawRad);
+
+        this.cameraEntity.setPosition(x, y, z);
+        this.cameraEntity.lookAt(this.target);
+    }
+
+    getTarget(out: pc.Vec3 = new pc.Vec3()): pc.Vec3 {
+        return out.copy(this.target);
+    }
+
+    getCameraPosition(out: pc.Vec3 = new pc.Vec3()): pc.Vec3 {
+        return out.copy(this.cameraEntity.getPosition());
+    }
+}
+
+const controls = new SimpleOrbitControls(cameraEntity, viewerCanvas);
+
+type PositionProps = {
+    x: ArrayLike<number>;
+    y: ArrayLike<number>;
+    z: ArrayLike<number>;
+};
+
+let managedFiles: PlyFileMeta[] = [];
 let selectedId: string | null = null;
 let isLoading = false;
 let queuedSelectionId: string | null = null;
 let resetAfterLoad = false;
-let currentSplat: SPLAT.Splat | null = null;
+let currentSplat: LoadedSplat | null = null;
 let autoOrbitFromTop = DEFAULT_UI_SETTINGS.orbitTop;
 let showCameraAid = DEFAULT_UI_SETTINGS.cameraAid;
 let showCentroidAxes = DEFAULT_UI_SETTINGS.centroidAxes;
-let currentOrbitTarget: SPLAT.Vector3 | null = null;
+let currentOrbitTarget: pc.Vec3 | null = null;
 let currentAidAxisLength = 1;
 let perFileUiSettings: Record<string, PerFileUiSettings> = loadPerFileUiSettings();
-let fovDeg = focalPixelsToFovDeg(camera.data.fy, camera.data.height);
-
+let fovDeg = 60;
 let descriptionTimer: ReturnType<typeof setTimeout> | null = null;
-
-function isEditableTarget(target: EventTarget | null): boolean {
-    if (!(target instanceof HTMLElement)) return false;
-    if (target.isContentEditable) return true;
-    const tag = target.tagName;
-    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
-}
-
-function setupDiamondKeyMapping(): void {
-    const remapXToBackward = (event: KeyboardEvent) => {
-        if (event.code !== "KeyX") return;
-        if (isEditableTarget(event.target)) return;
-
-        event.preventDefault();
-        event.stopPropagation();
-
-        const aliased = new KeyboardEvent(event.type, {
-            code: "KeyS",
-            key: "s",
-            repeat: event.repeat,
-            altKey: event.altKey,
-            ctrlKey: event.ctrlKey,
-            metaKey: event.metaKey,
-            shiftKey: event.shiftKey,
-            bubbles: true,
-            cancelable: true,
-        });
-        window.dispatchEvent(aliased);
-    };
-
-    // Capture phase remap so OrbitControls receives KeyS-equivalent from X.
-    window.addEventListener("keydown", remapXToBackward, true);
-    window.addEventListener("keyup", remapXToBackward, true);
-}
 
 function setStatus(message: string): void {
     statusText.textContent = message;
 }
 
 function clampFovDeg(value: number): number {
-    return Math.min(Math.max(value, 1), 179);
-}
-
-function focalPixelsToFovDeg(focalPixels: number, imagePixels: number): number {
-    const focal = Math.max(focalPixels, 1e-6);
-    const imageSize = Math.max(imagePixels, 1);
-    const fovRad = 2 * Math.atan(imageSize / (2 * focal));
-    return clampFovDeg((fovRad * 180) / Math.PI);
-}
-
-function fovDegToFocalPixels(fovDeg: number, imagePixels: number): number {
-    const clampedFov = clampFovDeg(fovDeg);
-    const halfAngle = (clampedFov * Math.PI) / 360;
-    const imageSize = Math.max(imagePixels, 1);
-    return imageSize / (2 * Math.tan(halfAngle));
-}
-
-function getRenderSize(): { width: number; height: number } {
-    const width = Math.max(1, renderer.canvas.width || viewer.clientWidth || camera.data.width);
-    const height = Math.max(1, renderer.canvas.height || viewer.clientHeight || camera.data.height);
-    return { width, height };
-}
-
-function applyCurrentFovToCamera(): void {
-    const { height } = getRenderSize();
-    const focal = fovDegToFocalPixels(fovDeg, height);
-    // Keep a single focal length to avoid non-uniform scaling distortion.
-    camera.data.fx = focal;
-    camera.data.fy = focal;
-    camera.update();
+    return Math.min(Math.max(value, 1), 179.9);
 }
 
 function syncFovInput(): void {
     fovInput.value = fovDeg.toFixed(2);
+    fovSlider.value = fovDeg.toFixed(2);
+}
+
+function applyCurrentFovToCamera(): void {
+    cameraComponent.fov = fovDeg;
 }
 
 function commitFovInput(): void {
@@ -298,6 +379,7 @@ function resizeCameraAidCanvas(): { width: number; height: number } {
 
     const deviceWidth = Math.floor(width * dpr);
     const deviceHeight = Math.floor(height * dpr);
+
     if (cameraAidCanvas.width !== deviceWidth) cameraAidCanvas.width = deviceWidth;
     if (cameraAidCanvas.height !== deviceHeight) cameraAidCanvas.height = deviceHeight;
 
@@ -308,18 +390,31 @@ function resizeCameraAidCanvas(): { width: number; height: number } {
     return { width, height };
 }
 
+function projectWorldToScreen(point: pc.Vec3): { x: number; y: number } | null {
+    const cameraPos = cameraEntity.getPosition();
+    const toPoint = tempVecA.sub2(point, cameraPos);
+    if (toPoint.dot(cameraEntity.forward) <= 0) return null;
+
+    cameraComponent.worldToScreen(point, tempScreen);
+    if (!Number.isFinite(tempScreen.x) || !Number.isFinite(tempScreen.y)) return null;
+
+    return { x: tempScreen.x, y: tempScreen.y };
+}
+
 function drawCameraAid(): void {
     if (cameraAidCtx === null) return;
+
     const { width, height } = resizeCameraAidCanvas();
     cameraAidCtx.clearRect(0, 0, width, height);
 
     if (!showCameraAid || currentOrbitTarget === null) return;
 
     const target = currentOrbitTarget;
-    const camPos = camera.position;
-    const relative = camPos.subtract(target);
+    const camPos = controls.getCameraPosition(tempVecA);
+    const relative = tempVecB.sub2(camPos, target);
+
     const horizontalDistance = Math.hypot(relative.x, relative.z);
-    const distance = relative.magnitude();
+    const distance = relative.length();
     const elevationDeg = Math.atan2(relative.y, Math.max(horizontalDistance, 1e-6)) * 180 / Math.PI;
 
     const panelSize = Math.min(170, Math.max(120, Math.floor(Math.min(width, height) * 0.26)));
@@ -388,22 +483,6 @@ function drawCameraAid(): void {
     cameraAidCtx.fillText(`dist ${distance.toFixed(2)}`, panelX + 9, panelY + panelSize + 15);
     cameraAidCtx.fillText(`elev ${elevationDeg >= 0 ? "+" : ""}${elevationDeg.toFixed(1)} deg`, panelX + 9, panelY + panelSize + 29);
 
-    const projectWorldToScreen = (point: SPLAT.Vector3) => {
-        const clip = new SPLAT.Vector4(point.x, point.y, point.z, 1).multiply(camera.data.viewProj);
-        if (Math.abs(clip.w) < 1e-6) return null;
-
-        const ndcX = clip.x / clip.w;
-        const ndcY = clip.y / clip.w;
-        const ndcZ = clip.z / clip.w;
-        const inFront = clip.w > 0;
-        if (!inFront || ndcZ < -1.5 || ndcZ > 1.5) return null;
-
-        return {
-            x: (ndcX * 0.5 + 0.5) * width,
-            y: (1 - (ndcY * 0.5 + 0.5)) * height,
-        };
-    };
-
     const centroid = currentOrbitTarget;
     const axisLen = Math.max(currentAidAxisLength, 0.05);
     const origin2D = projectWorldToScreen(centroid);
@@ -411,9 +490,9 @@ function drawCameraAid(): void {
 
     if (!showCentroidAxes) return;
 
-    const xEnd2D = projectWorldToScreen(centroid.add(new SPLAT.Vector3(axisLen, 0, 0)));
-    const yEnd2D = projectWorldToScreen(centroid.add(new SPLAT.Vector3(0, axisLen, 0)));
-    const zEnd2D = projectWorldToScreen(centroid.add(new SPLAT.Vector3(0, 0, axisLen)));
+    const xEnd2D = projectWorldToScreen(new pc.Vec3(centroid.x + axisLen, centroid.y, centroid.z));
+    const yEnd2D = projectWorldToScreen(new pc.Vec3(centroid.x, centroid.y + axisLen, centroid.z));
+    const zEnd2D = projectWorldToScreen(new pc.Vec3(centroid.x, centroid.y, centroid.z + axisLen));
 
     cameraAidCtx.lineWidth = 2.2;
 
@@ -464,32 +543,38 @@ function quantile(values: number[], q: number): number {
     return sorted[low] * (1 - t) + sorted[high] * t;
 }
 
-type InlierStats = {
-    count: number;
-    sumX: number;
-    sumY: number;
-    sumZ: number;
-    minX: number;
-    minY: number;
-    minZ: number;
-    maxX: number;
-    maxY: number;
-    maxZ: number;
-};
+function isArrayLikeNumber(value: unknown): value is ArrayLike<number> {
+    if (value === null || value === undefined) return false;
+    if (ArrayBuffer.isView(value)) return true;
+    return Array.isArray(value);
+}
 
-function computeFallbackStats(splat: SPLAT.Splat): { center: SPLAT.Vector3; maxDim: number } {
-    const bounds = splat.bounds;
-    const center = bounds.center();
-    const size = bounds.size();
+function getPositionProps(gsplatData: pc.GSplatData): PositionProps | null {
+    const xProp = gsplatData.getProp("x");
+    const yProp = gsplatData.getProp("y");
+    const zProp = gsplatData.getProp("z");
+
+    if (!isArrayLikeNumber(xProp) || !isArrayLikeNumber(yProp) || !isArrayLikeNumber(zProp)) {
+        return null;
+    }
+
+    return { x: xProp, y: yProp, z: zProp };
+}
+
+function computeFallbackStats(splat: LoadedSplat): { center: pc.Vec3; maxDim: number } {
+    const center = splat.aabb.center.clone();
+    const half = splat.aabb.halfExtents;
     return {
         center,
-        maxDim: Math.max(size.x, size.y, size.z, 1),
+        maxDim: Math.max(half.x * 2, half.y * 2, half.z * 2, 1),
     };
 }
 
-function computeRobustSplatStats(splat: SPLAT.Splat): { center: SPLAT.Vector3; maxDim: number } {
-    const positions = splat.data.positions;
-    const vertexCount = Math.floor(positions.length / 3);
+function computeRobustSplatStats(splat: LoadedSplat): { center: pc.Vec3; maxDim: number } {
+    const props = getPositionProps(splat.gsplatData);
+    if (props === null) return computeFallbackStats(splat);
+
+    const vertexCount = Math.min(props.x.length, props.y.length, props.z.length);
     if (vertexCount <= 0) return computeFallbackStats(splat);
 
     const sampleCap = 20000;
@@ -499,10 +584,9 @@ function computeRobustSplatStats(splat: SPLAT.Splat): { center: SPLAT.Vector3; m
     const zs: number[] = [];
 
     for (let i = 0; i < vertexCount; i += step) {
-        const base = i * 3;
-        xs.push(positions[base]);
-        ys.push(positions[base + 1]);
-        zs.push(positions[base + 2]);
+        xs.push(Number(props.x[i]));
+        ys.push(Number(props.y[i]));
+        zs.push(Number(props.z[i]));
         if (xs.length >= sampleCap) break;
     }
 
@@ -528,10 +612,9 @@ function computeRobustSplatStats(splat: SPLAT.Splat): { center: SPLAT.Vector3; m
         let maxZ = Number.NEGATIVE_INFINITY;
 
         for (let i = 0; i < vertexCount; i++) {
-            const base = i * 3;
-            const x = positions[base];
-            const y = positions[base + 1];
-            const z = positions[base + 2];
+            const x = Number(props.x[i]);
+            const y = Number(props.y[i]);
+            const z = Number(props.z[i]);
 
             if (x < xMin || x > xMax || y < yMin || y > yMax || z < zMin || z > zMax) {
                 continue;
@@ -586,52 +669,38 @@ function computeRobustSplatStats(splat: SPLAT.Splat): { center: SPLAT.Vector3; m
 
     if (inliers.count === 0) return computeFallbackStats(splat);
 
-    const center = new SPLAT.Vector3(
+    const center = new pc.Vec3(
         inliers.sumX / inliers.count,
         inliers.sumY / inliers.count,
         inliers.sumZ / inliers.count,
     );
+
     const maxDim = Math.max(
         inliers.maxX - inliers.minX,
         inliers.maxY - inliers.minY,
         inliers.maxZ - inliers.minZ,
         1,
     );
+
     return { center, maxDim };
 }
 
-function fitCameraToSplat(
-    splat: SPLAT.Splat,
-    target: SPLAT.Vector3,
-    mode: "default" | "viser",
-    maxDimOverride?: number,
-): void {
+function fitCameraToTarget(target: pc.Vec3, mode: "default" | "viser", maxDim: number): void {
     currentOrbitTarget = target.clone();
-    const size = splat.bounds.size();
-    const maxDim = maxDimOverride ?? Math.max(size.x, size.y, size.z);
     currentAidAxisLength = Math.max(maxDim * 0.12, 0.08);
+
     const distanceScale = mode === "viser" ? 0.85 : 1.5;
     const distance = Math.max(maxDim * distanceScale, 0.75);
 
-    // Prevent far-plane clipping for large reconstructions.
-    camera.data.near = Math.max(distance / 1000, 0.01);
-    camera.data.far = Math.max(distance * 20, 1000);
+    cameraComponent.nearClip = Math.max(distance / 1000, 0.01);
+    cameraComponent.farClip = Math.max(distance * 20, 1000);
 
-    controls.dispose();
-    const alpha = mode === "viser" ? viserOrbitAlpha : 0;
-    const beta = mode === "viser"
-        ? (autoOrbitFromTop ? viserOrbitBetaMagnitude : -viserOrbitBetaMagnitude)
-        : 0.3;
-    controls = new SPLAT.OrbitControls(
-        camera,
-        renderer.canvas,
-        alpha,
-        beta,
-        distance,
-        true,
-        target,
-    );
-    controls.maxZoom = Math.max(30, distance * 3);
+    const yaw = mode === "viser" ? VISER_ORBIT_YAW_DEG : 0;
+    const pitch = mode === "viser"
+        ? (autoOrbitFromTop ? VISER_ORBIT_PITCH_DEG : -VISER_ORBIT_PITCH_DEG)
+        : 18;
+
+    controls.setPose(target, distance, yaw, pitch);
 }
 
 function autoPositionCurrentSplat(): void {
@@ -640,26 +709,138 @@ function autoPositionCurrentSplat(): void {
 
     const robustStats = computeRobustSplatStats(currentSplat);
     const center = robustStats.center;
-    currentSplat.rotation = viserWorldToThreeRotation;
-    const rotatedCenter = viserWorldToThreeRotation.apply(center);
-    currentSplat.position = center.subtract(rotatedCenter);
-    fitCameraToSplat(currentSplat, center, "viser", robustStats.maxDim);
 
+    currentSplat.entity.setLocalRotation(VISER_WORLD_ROTATION);
+
+    const rotatedCenter = VISER_WORLD_ROTATION.transformVector(center, tempVecA);
+    const offset = tempVecB.sub2(center, rotatedCenter);
+    currentSplat.entity.setLocalPosition(offset);
+
+    fitCameraToTarget(center, "viser", robustStats.maxDim);
     setStatus(`Auto positioned ${selectedFile.filename}`);
     updateActionButtons();
 }
 
+async function fetchBlobWithProgress(url: string, onProgress: (progress: number) => void): Promise<Blob> {
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch PLY: HTTP ${response.status}`);
+    }
+
+    const contentType = response.headers.get("content-type") ?? "application/octet-stream";
+    const totalRaw = Number.parseInt(response.headers.get("content-length") ?? "", 10);
+    const total = Number.isFinite(totalRaw) && totalRaw > 0 ? totalRaw : null;
+
+    if (response.body === null) {
+        const blob = await response.blob();
+        onProgress(1);
+        return blob;
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let loaded = 0;
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value === undefined) continue;
+
+        chunks.push(value);
+        loaded += value.byteLength;
+
+        if (total !== null) {
+            onProgress(Math.min(loaded / total, 1));
+        }
+    }
+
+    if (total === null) {
+        onProgress(0.95);
+    }
+
+    const blobParts: BlobPart[] = chunks.map((chunk) => {
+        const copy = new Uint8Array(chunk.byteLength);
+        copy.set(chunk);
+        return copy.buffer;
+    });
+    return new Blob(blobParts, { type: contentType });
+}
+
+async function loadPlayCanvasSplat(
+    url: string,
+    filename: string,
+    onProgress: (progress: number) => void,
+): Promise<LoadedSplat> {
+    const blob = await fetchBlobWithProgress(url, (progress) => {
+        onProgress(Math.min(progress * 0.9, 0.9));
+    });
+
+    const objectUrl = URL.createObjectURL(blob);
+    onProgress(0.92);
+
+    const asset = new pc.Asset(filename, "gsplat", { url: objectUrl, filename });
+    app.assets.add(asset);
+
+    const resource = await new Promise<pc.GSplatResource>((resolve, reject) => {
+        const handleError = (error: unknown) => {
+            asset.off("error", handleError);
+            reject(error instanceof Error ? error : new Error(String(error)));
+        };
+
+        asset.on("error", handleError);
+
+        asset.ready(() => {
+            asset.off("error", handleError);
+            resolve(asset.resource as pc.GSplatResource);
+        });
+
+        app.assets.load(asset);
+    });
+
+    const entity = new pc.Entity(`splat-${filename}`);
+    entity.addComponent("gsplat", { asset });
+    app.root.addChild(entity);
+
+    onProgress(1);
+
+    return {
+        asset,
+        entity,
+        gsplatData: resource.gsplatData as pc.GSplatData,
+        aabb: resource.aabb.clone(),
+        objectUrl,
+    };
+}
+
+function clearCurrentSplat(): void {
+    if (currentSplat === null) return;
+
+    app.root.removeChild(currentSplat.entity);
+    currentSplat.entity.destroy();
+
+    app.assets.remove(currentSplat.asset);
+    currentSplat.asset.unload();
+
+    if (currentSplat.objectUrl !== null) {
+        URL.revokeObjectURL(currentSplat.objectUrl);
+    }
+
+    currentSplat = null;
+}
+
 async function renderSelectedFile(autoPositionAfterLoad = false): Promise<void> {
     const selectedFile = getSelectedFile();
+
     if (selectedFile === undefined) {
-        currentSplat = null;
+        clearCurrentSplat();
         currentOrbitTarget = null;
         updateActionButtons();
+
         if (isLoading) {
             resetAfterLoad = true;
             return;
         }
-        scene.reset();
+
         loadProgress.value = 0;
         setStatus("No file selected.");
         return;
@@ -673,37 +854,34 @@ async function renderSelectedFile(autoPositionAfterLoad = false): Promise<void> 
     isLoading = true;
     resetAfterLoad = false;
     queuedSelectionId = null;
-    currentSplat = null;
+
+    clearCurrentSplat();
     currentOrbitTarget = null;
+
     updateActionButtons();
     loadProgress.value = 0;
     setStatus(`Loading ${selectedFile.filename}...`);
-    scene.reset();
 
     try {
         const url = fileDataUrl(selectedFile.id);
-        const splat = await SPLAT.PLYLoader.LoadAsync(
-            url,
-            scene,
-            (progress: number) => {
-                loadProgress.value = progress * 100;
-            },
-            plyFormat,
-        );
+        const splat = await loadPlayCanvasSplat(url, selectedFile.filename, (progress) => {
+            loadProgress.value = progress * 100;
+        });
 
         currentSplat = splat;
+
         if (autoPositionAfterLoad) {
             autoPositionCurrentSplat();
         } else {
-            // Default render is "as is". Auto transform is optional via button.
-            const center = splat.bounds.center();
-            fitCameraToSplat(splat, center, "default");
+            const fallback = computeFallbackStats(splat);
+            fitCameraToTarget(fallback.center, "default", fallback.maxDim);
             setStatus(`Loaded ${selectedFile.filename}`);
         }
+
         updateActionButtons();
     } catch (error) {
         console.error(error);
-        currentSplat = null;
+        clearCurrentSplat();
         currentOrbitTarget = null;
         updateActionButtons();
         setStatus(`Failed to load ${selectedFile.filename}`);
@@ -720,7 +898,7 @@ async function renderSelectedFile(autoPositionAfterLoad = false): Promise<void> 
         }
 
         if (resetAfterLoad && selectedId === null) {
-            scene.reset();
+            clearCurrentSplat();
             loadProgress.value = 0;
             setStatus("No file selected.");
         }
@@ -750,12 +928,12 @@ async function addFiles(files: File[]): Promise<void> {
 
     try {
         const uploaded = await uploadFiles(plyFiles);
-        // Refresh the full list from server
         managedFiles = await fetchFiles();
 
         if (selectedId === null && uploaded.length > 0) {
             selectedId = uploaded[0].id;
         }
+
         resetAfterLoad = false;
 
         applyPerFileUiSettings(selectedId);
@@ -793,10 +971,9 @@ async function deleteSelectedFile(): Promise<void> {
             selectedId = null;
             queuedSelectionId = null;
             resetAfterLoad = true;
-            currentSplat = null;
+            clearCurrentSplat();
             currentOrbitTarget = null;
             applyPerFileUiSettings(null);
-            scene.reset();
             loadProgress.value = 0;
             setStatus("No file selected.");
         } else {
@@ -819,30 +996,40 @@ async function deleteSelectedFile(): Promise<void> {
 }
 
 function handleResize(): void {
-    renderer.setSize(viewer.clientWidth, viewer.clientHeight);
-    applyCurrentFovToCamera();
+    const width = Math.max(1, viewer.clientWidth);
+    const height = Math.max(1, viewer.clientHeight);
+
+    app.graphicsDevice.maxPixelRatio = Math.max(1, window.devicePixelRatio || 1);
+    app.resizeCanvas(width, height);
+
+    viewerCanvas.style.width = `${width}px`;
+    viewerCanvas.style.height = `${height}px`;
+
+    drawCameraAid();
 }
 
 async function main(): Promise<void> {
-    setupDiamondKeyMapping();
     updateOrbitSideButtonLabel();
     updateCameraAidButtonLabel();
     updateCentroidAxesButtonLabel();
+
+    fovDeg = clampFovDeg(cameraComponent.fov);
     syncFovInput();
+    applyCurrentFovToCamera();
+
+    controls.setPose(new pc.Vec3(0, 0, 0), 2.5, VISER_ORBIT_YAW_DEG, VISER_ORBIT_PITCH_DEG);
+
     handleResize();
     drawCameraAid();
+
     window.addEventListener("resize", handleResize);
     new ResizeObserver(handleResize).observe(viewer);
 
-    const frame = () => {
+    app.on("update", () => {
         controls.update();
-        renderer.render(scene, camera);
         drawCameraAid();
-        requestAnimationFrame(frame);
-    };
-    requestAnimationFrame(frame);
+    });
 
-    // Load existing files from server
     try {
         managedFiles = await fetchFiles();
         if (managedFiles.length > 0) {
@@ -850,7 +1037,6 @@ async function main(): Promise<void> {
             applyPerFileUiSettings(null);
             updateDescriptionEditor();
             renderFileList();
-            scene.reset();
             loadProgress.value = 0;
             setStatus("No file selected.");
         } else {
@@ -904,17 +1090,27 @@ async function main(): Promise<void> {
     fovInput.addEventListener("change", () => {
         commitFovInput();
     });
+
     fovInput.addEventListener("blur", () => {
         commitFovInput();
+    });
+
+    fovSlider.addEventListener("input", () => {
+        const parsed = Number.parseFloat(fovSlider.value);
+        if (!Number.isFinite(parsed)) return;
+        fovDeg = clampFovDeg(parsed);
+        syncFovInput();
+        applyCurrentFovToCamera();
+        drawCameraAid();
     });
 
     descriptionInput.addEventListener("input", () => {
         const selectedFile = getSelectedFile();
         if (selectedFile === undefined) return;
+
         selectedFile.description = descriptionInput.value;
         renderFileList();
 
-        // Debounced save to server
         if (descriptionTimer !== null) clearTimeout(descriptionTimer);
         descriptionTimer = setTimeout(() => {
             void updateDescription(selectedFile.id, selectedFile.description);

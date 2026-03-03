@@ -3,13 +3,13 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>gsplat.js - PLY File Manager</title>
+        <title>PlayCanvas - PLY File Manager</title>
     </head>
     <body>
         <div class="layout">
             <aside class="sidebar">
                 <h1>PLY File Manager</h1>
-                <p class="subtitle">Upload, describe, and render .ply files.</p>
+                <p class="subtitle">Upload, describe, and render .ply files (PlayCanvas viewer).</p>
 
                 <div class="actions">
                     <button id="add-files-button" type="button">Add .ply Files</button>
@@ -23,7 +23,10 @@
                 <div class="fov-controls">
                     <div class="fov-field">
                         <label for="fov-input">FOV (deg)</label>
-                        <input id="fov-input" type="number" min="1" max="179" step="0.1" />
+                        <div class="fov-row">
+                            <input id="fov-slider" type="range" min="0" max="180" step="0.1" />
+                            <input id="fov-input" type="number" min="0" max="180" step="0.1" />
+                        </div>
                     </div>
                 </div>
 

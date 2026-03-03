@@ -17,7 +17,7 @@
     "vite": "^7.0.4"
   },
   "dependencies": {
-    "gsplat": "^1.2.9",
-    "hono": "^4.12.3"
+    "hono": "^4.12.3",
+    "playcanvas": "^2.16.2"
   }
 }
