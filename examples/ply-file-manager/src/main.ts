@@ -1924,7 +1924,10 @@ async function addFiles(files: File[]): Promise<void> {
     addFilesButton.disabled = true;
 
     try {
-        const uploaded = await uploadFiles(plyFiles);
+        const uploaded = await uploadFiles(plyFiles, (progress) => {
+            loadProgress.value = progress * 100;
+        });
+        loadProgress.value = 100;
         managedFiles = await fetchFiles();
 
         if (selectedId === null && uploaded.length > 0) {
