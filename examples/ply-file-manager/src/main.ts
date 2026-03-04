@@ -65,6 +65,14 @@ const VISER_ORBIT_PITCH_DEG = Math.atan(1 / Math.sqrt(2)) * 180 / Math.PI;
 const PLAYCANVAS_RUNTIME_INLINE = playcanvasRuntimeSource
     .replace(/<\/script/gi, "<\\/script")
     .replace(/\/\/# sourceMappingURL=.*$/gm, "");
+const NAVIGATION_KEY_ALIASES: Record<string, string> = {
+    ArrowUp: "KeyW",
+    ArrowDown: "KeyS",
+    ArrowLeft: "KeyA",
+    ArrowRight: "KeyD",
+    KeyX: "KeyS",
+};
+const SUPPORTED_NAVIGATION_KEYS = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "KeyR", "KeyF"]);
 
 const tempVecA = new pc.Vec3();
 const tempVecB = new pc.Vec3();
@@ -97,9 +105,26 @@ type InlierStats = {
     maxZ: number;
 };
 
+function isEditableTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    if (target.isContentEditable) return true;
+    const tag = target.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
+function normalizeNavigationCode(code: string): string | null {
+    const mapped = NAVIGATION_KEY_ALIASES[code];
+    if (mapped !== undefined) return mapped;
+    if (SUPPORTED_NAVIGATION_KEYS.has(code)) return code;
+    return null;
+}
+
 class SimpleOrbitControls {
     private readonly cameraEntity: pc.Entity;
     private readonly canvas: HTMLCanvasElement;
+    private readonly keyState: Record<string, boolean> = {};
+    private readonly movementForward = new pc.Vec3();
+    private readonly movementRight = new pc.Vec3();
 
     private target = new pc.Vec3();
     private distance = 3;
@@ -161,6 +186,31 @@ class SimpleOrbitControls {
             },
             { passive: false },
         );
+
+        window.addEventListener("keydown", (event) => {
+            this.handleKeyStateEvent(event, true);
+        });
+        window.addEventListener("keyup", (event) => {
+            this.handleKeyStateEvent(event, false);
+        });
+        window.addEventListener("blur", () => {
+            this.clearKeyState();
+        });
+    }
+
+    private handleKeyStateEvent(event: KeyboardEvent, active: boolean): void {
+        if (isEditableTarget(event.target)) return;
+        const code = normalizeNavigationCode(event.code);
+        if (code === null) return;
+
+        this.keyState[code] = active;
+        event.preventDefault();
+    }
+
+    private clearKeyState(): void {
+        for (const code of Object.keys(this.keyState)) {
+            this.keyState[code] = false;
+        }
     }
 
     setPose(target: pc.Vec3, distance: number, yawDeg: number, pitchDeg: number): void {
@@ -172,6 +222,60 @@ class SimpleOrbitControls {
     }
 
     update(): void {
+        const moveSpeed = Math.max(this.distance * 0.012, 0.01);
+        const rotateSpeedDeg = 0.8;
+
+        if (this.keyState.KeyE === true) this.yawDeg += rotateSpeedDeg;
+        if (this.keyState.KeyQ === true) this.yawDeg -= rotateSpeedDeg;
+        if (this.keyState.KeyR === true) this.pitchDeg += rotateSpeedDeg;
+        if (this.keyState.KeyF === true) this.pitchDeg -= rotateSpeedDeg;
+        this.pitchDeg = Math.max(-89.5, Math.min(89.5, this.pitchDeg));
+
+        const hasMoveInput = this.keyState.KeyW === true
+            || this.keyState.KeyA === true
+            || this.keyState.KeyS === true
+            || this.keyState.KeyD === true;
+
+        if (hasMoveInput) {
+            this.movementForward.sub2(this.target, this.cameraEntity.getPosition());
+            if (this.movementForward.lengthSq() > 1e-8) {
+                this.movementForward.normalize();
+            } else {
+                this.movementForward.set(0, 0, -1);
+            }
+
+            this.movementRight.copy(this.cameraEntity.right);
+            if (this.movementRight.lengthSq() > 1e-8) {
+                this.movementRight.normalize();
+            } else {
+                this.movementRight.set(1, 0, 0);
+            }
+
+            if (this.keyState.KeyW === true) {
+                this.target.x += this.movementForward.x * moveSpeed;
+                this.target.y += this.movementForward.y * moveSpeed;
+                this.target.z += this.movementForward.z * moveSpeed;
+            }
+
+            if (this.keyState.KeyS === true) {
+                this.target.x -= this.movementForward.x * moveSpeed;
+                this.target.y -= this.movementForward.y * moveSpeed;
+                this.target.z -= this.movementForward.z * moveSpeed;
+            }
+
+            if (this.keyState.KeyA === true) {
+                this.target.x -= this.movementRight.x * moveSpeed;
+                this.target.y -= this.movementRight.y * moveSpeed;
+                this.target.z -= this.movementRight.z * moveSpeed;
+            }
+
+            if (this.keyState.KeyD === true) {
+                this.target.x += this.movementRight.x * moveSpeed;
+                this.target.y += this.movementRight.y * moveSpeed;
+                this.target.z += this.movementRight.z * moveSpeed;
+            }
+        }
+
         const yawRad = this.yawDeg * Math.PI / 180;
         const pitchRad = this.pitchDeg * Math.PI / 180;
 
@@ -988,6 +1092,14 @@ ${runtimeScript}
       const tempVecA = new pc.Vec3();
       const tempVecB = new pc.Vec3();
       const tempScreen = new pc.Vec3();
+      const navigationKeyAliases = {
+        ArrowUp: "KeyW",
+        ArrowDown: "KeyS",
+        ArrowLeft: "KeyA",
+        ArrowRight: "KeyD",
+        KeyX: "KeyS",
+      };
+      const supportedNavigationKeys = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "KeyR", "KeyF"]);
 
       let currentEntity = null;
       let currentData = null;
@@ -999,10 +1111,27 @@ ${runtimeScript}
       let showCentroidAxes = !!payload.centroidAxes;
       let fovDeg = Math.min(Math.max(Number(payload.initialFovDeg) || 60, 1), 179.9);
 
+      const isEditableTarget = (target) => {
+        if (!(target instanceof HTMLElement)) return false;
+        if (target.isContentEditable) return true;
+        const tag = target.tagName;
+        return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      };
+
+      const normalizeNavigationCode = (code) => {
+        const mapped = navigationKeyAliases[code];
+        if (mapped !== undefined) return mapped;
+        if (supportedNavigationKeys.has(code)) return code;
+        return null;
+      };
+
       class SimpleOrbitControls {
         constructor(cameraEntity, canvas) {
           this.cameraEntity = cameraEntity;
           this.canvas = canvas;
+          this.keyState = Object.create(null);
+          this.movementForward = new pc.Vec3();
+          this.movementRight = new pc.Vec3();
           this.target = new pc.Vec3();
           this.distance = 3;
           this.yawDeg = 135;
@@ -1045,6 +1174,30 @@ ${runtimeScript}
             this.distance *= factor;
             this.distance = Math.max(0.03, Math.min(5000, this.distance));
           }, { passive: false });
+          window.addEventListener("keydown", (event) => {
+            this.handleKeyStateEvent(event, true);
+          });
+          window.addEventListener("keyup", (event) => {
+            this.handleKeyStateEvent(event, false);
+          });
+          window.addEventListener("blur", () => {
+            this.clearKeyState();
+          });
+        }
+
+        handleKeyStateEvent(event, active) {
+          if (isEditableTarget(event.target)) return;
+          const code = normalizeNavigationCode(event.code);
+          if (code === null) return;
+          this.keyState[code] = active;
+          event.preventDefault();
+        }
+
+        clearKeyState() {
+          const keys = Object.keys(this.keyState);
+          for (let i = 0; i < keys.length; i++) {
+            this.keyState[keys[i]] = false;
+          }
         }
 
         setPose(target, distance, yawDeg, pitchDeg) {
@@ -1056,6 +1209,60 @@ ${runtimeScript}
         }
 
         update() {
+          const moveSpeed = Math.max(this.distance * 0.012, 0.01);
+          const rotateSpeedDeg = 0.8;
+
+          if (this.keyState.KeyE === true) this.yawDeg += rotateSpeedDeg;
+          if (this.keyState.KeyQ === true) this.yawDeg -= rotateSpeedDeg;
+          if (this.keyState.KeyR === true) this.pitchDeg += rotateSpeedDeg;
+          if (this.keyState.KeyF === true) this.pitchDeg -= rotateSpeedDeg;
+          this.pitchDeg = Math.max(-89.5, Math.min(89.5, this.pitchDeg));
+
+          const hasMoveInput = this.keyState.KeyW === true
+            || this.keyState.KeyA === true
+            || this.keyState.KeyS === true
+            || this.keyState.KeyD === true;
+
+          if (hasMoveInput) {
+            this.movementForward.sub2(this.target, this.cameraEntity.getPosition());
+            if (this.movementForward.lengthSq() > 1e-8) {
+              this.movementForward.normalize();
+            } else {
+              this.movementForward.set(0, 0, -1);
+            }
+
+            this.movementRight.copy(this.cameraEntity.right);
+            if (this.movementRight.lengthSq() > 1e-8) {
+              this.movementRight.normalize();
+            } else {
+              this.movementRight.set(1, 0, 0);
+            }
+
+            if (this.keyState.KeyW === true) {
+              this.target.x += this.movementForward.x * moveSpeed;
+              this.target.y += this.movementForward.y * moveSpeed;
+              this.target.z += this.movementForward.z * moveSpeed;
+            }
+
+            if (this.keyState.KeyS === true) {
+              this.target.x -= this.movementForward.x * moveSpeed;
+              this.target.y -= this.movementForward.y * moveSpeed;
+              this.target.z -= this.movementForward.z * moveSpeed;
+            }
+
+            if (this.keyState.KeyA === true) {
+              this.target.x -= this.movementRight.x * moveSpeed;
+              this.target.y -= this.movementRight.y * moveSpeed;
+              this.target.z -= this.movementRight.z * moveSpeed;
+            }
+
+            if (this.keyState.KeyD === true) {
+              this.target.x += this.movementRight.x * moveSpeed;
+              this.target.y += this.movementRight.y * moveSpeed;
+              this.target.z += this.movementRight.z * moveSpeed;
+            }
+          }
+
           const yawRad = this.yawDeg * Math.PI / 180;
           const pitchRad = this.pitchDeg * Math.PI / 180;
           const cosPitch = Math.cos(pitchRad);
