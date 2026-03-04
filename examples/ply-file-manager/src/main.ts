@@ -1713,6 +1713,7 @@ async function addFiles(files: File[]): Promise<void> {
     }
 
     setStatus(`Uploading ${plyFiles.length} file(s)...`);
+    loadProgress.value = 0;
     addFilesButton.disabled = true;
 
     try {
@@ -1735,6 +1736,7 @@ async function addFiles(files: File[]): Promise<void> {
         }
     } catch (error) {
         console.error(error);
+        loadProgress.value = 0;
         setStatus("Upload failed.");
     } finally {
         addFilesButton.disabled = false;
