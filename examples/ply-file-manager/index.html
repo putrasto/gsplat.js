@@ -34,6 +34,12 @@
                 <input id="file-input" type="file" accept=".ply" multiple hidden />
                 <p class="hint">You can also drag and drop .ply files anywhere in this page.</p>
 
+                <input
+                    id="file-filter-input"
+                    class="file-filter-input"
+                    type="text"
+                    placeholder="Filter files..."
+                />
                 <ul id="file-list" class="file-list"></ul>
 
                 <label for="description-input" class="description-label">Short Description</label>
@@ -49,6 +55,8 @@
                 <p id="status-text" class="status-text">No file selected.</p>
                 <progress id="load-progress" value="0" max="100"></progress>
             </aside>
+
+            <div id="resize-handle" class="resize-handle"></div>
 
             <main id="viewer" class="viewer"></main>
         </div>

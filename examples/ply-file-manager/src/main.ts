@@ -25,6 +25,9 @@ const statusText = document.getElementById("status-text") as HTMLParagraphElemen
 const loadProgress = document.getElementById("load-progress") as HTMLProgressElement;
 const fovInput = document.getElementById("fov-input") as HTMLInputElement;
 const fovSlider = document.getElementById("fov-slider") as HTMLInputElement;
+const fileFilterInput = document.getElementById("file-filter-input") as HTMLInputElement;
+const resizeHandle = document.getElementById("resize-handle") as HTMLDivElement;
+const sidebar = document.querySelector(".sidebar") as HTMLElement;
 
 const viewerCanvas = document.createElement("canvas");
 viewer.appendChild(viewerCanvas);
@@ -438,10 +441,25 @@ function updateDescriptionEditor(): void {
     descriptionInput.value = selectedFile.description;
 }
 
+function getFilteredSortedFiles(): PlyFileMeta[] {
+    const sorted = [...managedFiles].sort((a, b) =>
+        a.filename.localeCompare(b.filename, undefined, { sensitivity: "base" }),
+    );
+
+    const raw = fileFilterInput.value.trim().toLowerCase();
+    if (raw === "") return sorted;
+
+    const keywords = raw.split(/\s+/);
+    return sorted.filter((entry) => {
+        const haystack = (entry.filename + " " + entry.description).toLowerCase();
+        return keywords.every((kw) => haystack.includes(kw));
+    });
+}
+
 function renderFileList(): void {
     fileList.innerHTML = "";
 
-    for (const entry of managedFiles) {
+    for (const entry of getFilteredSortedFiles()) {
         const item = document.createElement("li");
         item.className = "file-item";
         if (entry.id === selectedId) {
@@ -1956,10 +1974,11 @@ async function addFiles(files: File[]): Promise<void> {
 async function deleteSelectedFile(): Promise<void> {
     if (selectedId === null) return;
 
-    const index = managedFiles.findIndex((entry) => entry.id === selectedId);
-    if (index < 0) return;
+    const deleted = managedFiles.find((entry) => entry.id === selectedId);
+    if (deleted === undefined) return;
 
-    const deleted = managedFiles[index];
+    const visibleFiles = getFilteredSortedFiles();
+    const visibleIndex = visibleFiles.findIndex((entry) => entry.id === selectedId);
     setStatus(`Deleting ${deleted.filename}...`);
 
     try {
@@ -1968,7 +1987,8 @@ async function deleteSelectedFile(): Promise<void> {
         savePerFileUiSettings();
         managedFiles = await fetchFiles();
 
-        if (managedFiles.length === 0) {
+        const nextVisible = getFilteredSortedFiles();
+        if (nextVisible.length === 0) {
             selectedId = null;
             queuedSelectionId = null;
             resetAfterLoad = true;
@@ -1978,8 +1998,8 @@ async function deleteSelectedFile(): Promise<void> {
             loadProgress.value = 0;
             setStatus("No file selected.");
         } else {
-            const nextIndex = Math.min(index, managedFiles.length - 1);
-            selectedId = managedFiles[nextIndex].id;
+            const nextIndex = Math.min(Math.max(visibleIndex, 0), nextVisible.length - 1);
+            selectedId = nextVisible[nextIndex].id;
             resetAfterLoad = false;
             applyPerFileUiSettings(selectedId);
         }
@@ -2008,6 +2028,40 @@ function handleResize(): void {
 
     drawCameraAid();
 }
+
+// --- Sidebar resize handle ---
+{
+    let isResizing = false;
+
+    resizeHandle.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        isResizing = true;
+        resizeHandle.classList.add("active");
+        document.body.style.cursor = "col-resize";
+        document.body.style.userSelect = "none";
+    });
+
+    window.addEventListener("mousemove", (e) => {
+        if (!isResizing) return;
+        const maxWidth = window.innerWidth * 0.6;
+        const newWidth = Math.min(maxWidth, Math.max(200, e.clientX));
+        sidebar.style.width = `${newWidth}px`;
+        handleResize();
+    });
+
+    window.addEventListener("mouseup", () => {
+        if (!isResizing) return;
+        isResizing = false;
+        resizeHandle.classList.remove("active");
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+    });
+}
+
+// --- File filter input ---
+fileFilterInput.addEventListener("input", () => {
+    renderFileList();
+});
 
 async function main(): Promise<void> {
     updateOrbitSideButtonLabel();

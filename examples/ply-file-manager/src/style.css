@@ -27,7 +27,7 @@ body {
 
 .sidebar {
     width: 320px;
-    min-width: 280px;
+    min-width: 200px;
     padding: 16px;
     background: #ffffff;
     border-right: 1px solid #d1d5db;
@@ -152,9 +152,8 @@ body {
     display: block;
     font-size: 0.9rem;
     color: #0f172a;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    word-wrap: break-word;
+    white-space: normal;
 }
 
 .file-name {
@@ -214,6 +213,27 @@ progress::-moz-progress-bar {
     border-radius: 999px;
 }
 
+.resize-handle {
+    width: 6px;
+    cursor: col-resize;
+    background: #d1d5db;
+    flex-shrink: 0;
+    transition: background 0.15s;
+}
+
+.resize-handle:hover,
+.resize-handle.active {
+    background: #2563eb;
+}
+
+.file-filter-input {
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 8px;
+    font-size: 0.85rem;
+    width: 100%;
+}
+
 .viewer {
     flex: 1;
     min-width: 0;
@@ -240,8 +260,12 @@ progress::-moz-progress-bar {
     }
 
     .sidebar {
-        width: 100%;
+        width: 100% !important;
         min-width: 0;
         height: 40vh;
+    }
+
+    .resize-handle {
+        display: none;
     }
 }
