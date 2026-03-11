@@ -29,18 +29,15 @@ function parseUploadResponse(xhr: XMLHttpRequest): UploadResponse {
     return JSON.parse(rawText) as UploadResponse;
 }
 
-export async function uploadFiles(
-    files: File[],
+function uploadSingleFile(
+    file: File,
     onProgress?: (progress: number) => void,
 ): Promise<UploadedFile[]> {
-    const form = new FormData();
-    for (const file of files) {
-        form.append("files", file);
-    }
-
-    return await new Promise<UploadedFile[]>((resolve, reject) => {
+    return new Promise<UploadedFile[]>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open("POST", "/api/files");
+        xhr.setRequestHeader("X-Filename", file.name);
+        xhr.setRequestHeader("Content-Type", "application/octet-stream");
         xhr.responseType = "json";
 
         if (onProgress !== undefined) {
@@ -82,8 +79,32 @@ export async function uploadFiles(
             }
         };
 
-        xhr.send(form);
+        // Send raw file binary — no FormData/multipart overhead
+        xhr.send(file);
     });
+}
+
+export async function uploadFiles(
+    files: File[],
+    onProgress?: (progress: number) => void,
+): Promise<UploadedFile[]> {
+    const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+    let completedSize = 0;
+    const allUploaded: UploadedFile[] = [];
+
+    for (const file of files) {
+        const fileStartOffset = completedSize;
+        const uploaded = await uploadSingleFile(file, onProgress ? (p) => {
+            const overall = totalSize > 0
+                ? (fileStartOffset + p * file.size) / totalSize
+                : 0;
+            onProgress(Math.min(Math.max(overall, 0), 1));
+        } : undefined);
+        completedSize += file.size;
+        allUploaded.push(...uploaded);
+    }
+
+    return allUploaded;
 }
 
 export async function updateDescription(id: string, description: string): Promise<void> {

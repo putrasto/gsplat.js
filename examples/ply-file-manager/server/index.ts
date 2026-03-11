@@ -29,41 +29,49 @@ app.get("/api/files/:id", (c) => {
     return c.json(sanitizeRow(row));
 });
 
+// Single-file streaming upload: client sends raw binary body with filename in header.
+// This avoids multipart buffering which causes AbortError on large files (300MB+).
 app.post("/api/files", async (c) => {
-    const body = await c.req.parseBody({ all: true });
-    const rawFiles = body["files"];
-    const fileArray = Array.isArray(rawFiles) ? rawFiles : rawFiles ? [rawFiles] : [];
-    const results: { id: string; filename: string }[] = [];
-
-    for (const item of fileArray) {
-        if (!(item instanceof File)) continue;
-        if (!item.name.toLowerCase().endsWith(".ply")) continue;
-
-        const id = crypto.randomUUID();
-        const storedName = `${id}.ply`;
-        const filePath = join(UPLOADS_DIR, storedName);
-
-        try {
-            await Bun.write(filePath, item);
-        } catch {
-            continue;
-        }
-
-        try {
-            plyDb.insert(id, item.name, "", filePath, item.size);
-        } catch {
-            if (existsSync(filePath)) unlinkSync(filePath);
-            continue;
-        }
-
-        results.push({ id, filename: item.name });
+    const filename = c.req.header("x-filename");
+    if (!filename || !filename.toLowerCase().endsWith(".ply")) {
+        return c.json({ error: "Missing or invalid X-Filename header (must end with .ply)" }, 400);
     }
 
-    if (results.length === 0) {
-        return c.json({ error: "No valid .ply files in request" }, 400);
+    const reqBody = c.req.raw.body;
+    if (!reqBody) {
+        return c.json({ error: "Empty request body" }, 400);
     }
 
-    return c.json({ uploaded: results }, 201);
+    const id = crypto.randomUUID();
+    const storedName = `${id}.ply`;
+    const filePath = join(UPLOADS_DIR, storedName);
+
+    try {
+        // Stream directly to disk — no full buffering in memory
+        const writer = Bun.file(filePath).writer();
+        const reader = reqBody.getReader();
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            writer.write(value);
+        }
+        await writer.end();
+    } catch {
+        if (existsSync(filePath)) unlinkSync(filePath);
+        return c.json({ error: "Failed to write file" }, 500);
+    }
+
+    const stat = Bun.file(filePath);
+    const fileSize = stat.size;
+
+    try {
+        plyDb.insert(id, filename, "", filePath, fileSize);
+    } catch {
+        if (existsSync(filePath)) unlinkSync(filePath);
+        return c.json({ error: "Failed to save file metadata" }, 500);
+    }
+
+    return c.json({ uploaded: [{ id, filename }] }, 201);
 });
 
 app.patch("/api/files/:id", async (c) => {
@@ -136,5 +144,6 @@ export default {
     hostname: host,
     port,
     maxRequestBodySize,
+    idleTimeout: 255, // seconds – prevent connection reset on large uploads (default is 10s)
     fetch: app.fetch,
 };
