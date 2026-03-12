@@ -148,7 +148,8 @@ app.get("/api/files/:id/export-html", async (c) => {
         return c.json({ error: "Forbidden" }, 403);
     }
 
-    const fov = Math.min(Math.max(parseFloat(c.req.query("fov") ?? "60"), 1), 179.9);
+    const fovRaw = parseFloat(c.req.query("fov") ?? "60");
+    const fov = Number.isFinite(fovRaw) ? Math.min(Math.max(fovRaw, 1), 179.9) : 60;
     const orbitTop = c.req.query("orbitTop") === "true";
     const cameraAid = c.req.query("cameraAid") === "true";
     const centroidAxes = c.req.query("centroidAxes") === "true";
@@ -167,6 +168,10 @@ app.get("/api/files/:id/export-html", async (c) => {
     // Stream: HTML prefix → "data:application/octet-stream;base64," → base64 PLY chunks → HTML suffix
     const encoder = new TextEncoder();
     const dataUrlPrefix = "data:application/octet-stream;base64,";
+
+    // Estimate total response size for Content-Length (enables client progress tracking)
+    const base64Size = Math.ceil(row.file_size / 3) * 4;
+    const estimatedTotal = Buffer.byteLength(prefix) + dataUrlPrefix.length + base64Size + Buffer.byteLength(suffix);
 
     const stream = new ReadableStream({
         async start(controller) {
@@ -218,6 +223,7 @@ app.get("/api/files/:id/export-html", async (c) => {
         headers: {
             "Content-Type": "text/html; charset=utf-8",
             "Content-Disposition": `attachment; filename="${baseName}-viewer.html"`,
+            "Content-Length": String(estimatedTotal),
         },
     });
 });

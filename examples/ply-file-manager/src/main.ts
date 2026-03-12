@@ -308,6 +308,8 @@ type PositionProps = {
 let managedFiles: PlyFileMeta[] = [];
 let selectedId: string | null = null;
 let isLoading = false;
+let isExporting = false;
+let loadAbortController: AbortController | null = null;
 let queuedSelectionId: string | null = null;
 let resetAfterLoad = false;
 let currentSplat: LoadedSplat | null = null;
@@ -478,7 +480,7 @@ function renderFileList(): void {
 
 function updateActionButtons(): void {
     deleteFileButton.disabled = selectedId === null || isLoading;
-    exportHtmlButton.disabled = selectedId === null;
+    exportHtmlButton.disabled = selectedId === null || isExporting;
     autoPositionButton.disabled = selectedId === null || isLoading || currentSplat === null;
     orbitSideButton.disabled = selectedId === null || isLoading || currentSplat === null;
     cameraAidButton.disabled = selectedId === null || isLoading || currentOrbitTarget === null;
@@ -846,8 +848,12 @@ function autoPositionCurrentSplat(): void {
     updateActionButtons();
 }
 
-async function fetchBlobWithProgress(url: string, onProgress: (progress: number) => void): Promise<Blob> {
-    const response = await fetch(url);
+async function fetchBlobWithProgress(
+    url: string,
+    onProgress: (progress: number) => void,
+    signal?: AbortSignal,
+): Promise<Blob> {
+    const response = await fetch(url, signal ? { signal } : undefined);
     if (!response.ok) {
         throw new Error(`Failed to fetch PLY: HTTP ${response.status}`);
     }
@@ -866,17 +872,26 @@ async function fetchBlobWithProgress(url: string, onProgress: (progress: number)
     const chunks: Uint8Array[] = [];
     let loaded = 0;
 
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value === undefined) continue;
+    try {
+        while (true) {
+            if (signal?.aborted) {
+                await reader.cancel();
+                throw signal.reason ?? new DOMException("Aborted", "AbortError");
+            }
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value === undefined) continue;
 
-        chunks.push(value);
-        loaded += value.byteLength;
+            chunks.push(value);
+            loaded += value.byteLength;
 
-        if (total !== null) {
-            onProgress(Math.min(loaded / total, 1));
+            if (total !== null) {
+                onProgress(Math.min(loaded / total, 1));
+            }
         }
+    } catch (error) {
+        await reader.cancel().catch(() => {});
+        throw error;
     }
 
     if (total === null) {
@@ -898,38 +913,144 @@ function sanitizeDownloadBaseName(filename: string): string {
 
 
 
-function exportSelectedFileAsHtml(): void {
-    const selectedFile = getSelectedFile();
-    if (selectedFile === undefined) return;
-
+function buildExportUrl(fileId: string): string {
     const params = new URLSearchParams({
         fov: String(fovDeg),
         orbitTop: String(autoOrbitFromTop),
         cameraAid: String(showCameraAid),
         centroidAxes: String(showCentroidAxes),
     });
+    return `/api/files/${fileId}/export-html?${params}`;
+}
+
+function cancelViewerLoading(): void {
+    if (loadAbortController) {
+        loadAbortController.abort();
+    }
+}
+
+async function exportWithFilePicker(selectedFile: PlyFileMeta): Promise<void> {
+    const baseName = sanitizeDownloadBaseName(selectedFile.filename);
+    const suggestedName = `${baseName}-viewer.html`;
+
+    // Show file picker first — if user cancels, bail out before touching loading state
+    let handle: FileSystemFileHandle;
+    try {
+        handle = await window.showSaveFilePicker({
+            suggestedName,
+            types: [{
+                description: "HTML file",
+                accept: { "text/html": [".html"] },
+            }],
+        });
+    } catch (error) {
+        // User cancelled the file picker dialog
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        throw error;
+    }
+
+    // Cancel current viewer loading to free bandwidth
+    cancelViewerLoading();
+
+    isExporting = true;
+    updateActionButtons();
+    loadProgress.value = 0;
+    setStatus(`Exporting ${suggestedName}...`);
+
+    let writable: FileSystemWritableFileStream | null = null;
+    try {
+        const response = await fetch(buildExportUrl(selectedFile.id));
+        if (!response.ok) {
+            throw new Error(`Export failed: HTTP ${response.status}`);
+        }
+
+        const totalRaw = Number.parseInt(response.headers.get("content-length") ?? "", 10);
+        const total = Number.isFinite(totalRaw) && totalRaw > 0 ? totalRaw : null;
+
+        writable = await handle.createWritable();
+
+        if (response.body === null) {
+            const blob = await response.blob();
+            await writable.write(blob);
+        } else {
+            const reader = response.body.getReader();
+            let written = 0;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (value === undefined) continue;
+
+                await writable.write(value);
+                written += value.byteLength;
+
+                if (total !== null) {
+                    loadProgress.value = Math.min(written / total, 1) * 100;
+                }
+            }
+        }
+
+        await writable.close();
+        writable = null;
+        loadProgress.value = 100;
+        setStatus(`Exported ${suggestedName}`);
+    } catch (error) {
+        // Abort the writable if it was opened but not closed
+        if (writable !== null) {
+            await writable.abort().catch(() => {});
+        }
+        console.error(error);
+        setStatus(`Failed to export ${suggestedName}`);
+    } finally {
+        isExporting = false;
+        updateActionButtons();
+        window.setTimeout(() => {
+            loadProgress.value = 0;
+        }, 400);
+    }
+}
+
+function exportFallback(selectedFile: PlyFileMeta): void {
+    // Cancel current viewer loading to free bandwidth
+    cancelViewerLoading();
 
     const baseName = sanitizeDownloadBaseName(selectedFile.filename);
     const anchor = document.createElement("a");
-    anchor.href = `/api/files/${selectedFile.id}/export-html?${params}`;
+    anchor.href = buildExportUrl(selectedFile.id);
     anchor.download = `${baseName}-viewer.html`;
     anchor.rel = "noopener";
     anchor.style.display = "none";
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
+    setStatus(`Exporting ${baseName}-viewer.html — click file again to reload viewer.`);
+}
 
-    setStatus(`Exporting ${baseName}-viewer.html (server-side)...`);
+function exportSelectedFileAsHtml(): void {
+    const selectedFile = getSelectedFile();
+    if (selectedFile === undefined) return;
+    if (isExporting) return;
+
+    if (typeof window.showSaveFilePicker === "function") {
+        void exportWithFilePicker(selectedFile);
+    } else {
+        exportFallback(selectedFile);
+    }
 }
 
 async function loadPlayCanvasSplat(
     url: string,
     filename: string,
     onProgress: (progress: number) => void,
+    signal?: AbortSignal,
 ): Promise<LoadedSplat> {
     const blob = await fetchBlobWithProgress(url, (progress) => {
         onProgress(Math.min(progress * 0.9, 0.9));
-    });
+    }, signal);
+
+    if (signal?.aborted) {
+        throw signal.reason ?? new DOMException("Aborted", "AbortError");
+    }
 
     const objectUrl = URL.createObjectURL(blob);
     onProgress(0.92);
@@ -940,15 +1061,25 @@ async function loadPlayCanvasSplat(
     const resource = await new Promise<pc.GSplatResource>((resolve, reject) => {
         const handleError = (error: unknown) => {
             asset.off("error", handleError);
+            signal?.removeEventListener("abort", handleAbort);
             reject(error instanceof Error ? error : new Error(String(error)));
         };
 
-        asset.on("error", handleError);
-
-        asset.ready(() => {
+        const handleAbort = () => {
             asset.off("error", handleError);
+            asset.off("load", handleLoad);
+            reject(signal!.reason ?? new DOMException("Aborted", "AbortError"));
+        };
+
+        const handleLoad = () => {
+            asset.off("error", handleError);
+            signal?.removeEventListener("abort", handleAbort);
             resolve(asset.resource as pc.GSplatResource);
-        });
+        };
+
+        asset.on("error", handleError);
+        asset.ready(handleLoad);
+        signal?.addEventListener("abort", handleAbort, { once: true });
 
         app.assets.load(asset);
     });
@@ -1011,6 +1142,10 @@ async function renderSelectedFile(autoPositionAfterLoad = false): Promise<void> 
     resetAfterLoad = false;
     queuedSelectionId = null;
 
+    loadAbortController?.abort();
+    loadAbortController = new AbortController();
+    const { signal } = loadAbortController;
+
     clearCurrentSplat();
     currentOrbitTarget = null;
 
@@ -1022,7 +1157,7 @@ async function renderSelectedFile(autoPositionAfterLoad = false): Promise<void> 
         const url = fileDataUrl(selectedFile.id);
         const splat = await loadPlayCanvasSplat(url, selectedFile.filename, (progress) => {
             loadProgress.value = progress * 100;
-        });
+        }, signal);
 
         currentSplat = splat;
 
@@ -1036,12 +1171,17 @@ async function renderSelectedFile(autoPositionAfterLoad = false): Promise<void> 
 
         updateActionButtons();
     } catch (error) {
-        console.error(error);
-        clearCurrentSplat();
-        currentOrbitTarget = null;
-        updateActionButtons();
-        setStatus(`Failed to load ${selectedFile.filename}`);
+        if (error instanceof DOMException && error.name === "AbortError") {
+            // Loading was intentionally cancelled (e.g. by export) — don't log or show error
+        } else {
+            console.error(error);
+            clearCurrentSplat();
+            currentOrbitTarget = null;
+            updateActionButtons();
+            setStatus(`Failed to load ${selectedFile.filename}`);
+        }
     } finally {
+        loadAbortController = null;
         isLoading = false;
         updateActionButtons();
 
