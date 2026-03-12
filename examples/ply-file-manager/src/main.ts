@@ -478,7 +478,7 @@ function renderFileList(): void {
 
 function updateActionButtons(): void {
     deleteFileButton.disabled = selectedId === null || isLoading;
-    exportHtmlButton.disabled = selectedId === null || isLoading;
+    exportHtmlButton.disabled = selectedId === null;
     autoPositionButton.disabled = selectedId === null || isLoading || currentSplat === null;
     orbitSideButton.disabled = selectedId === null || isLoading || currentSplat === null;
     cameraAidButton.disabled = selectedId === null || isLoading || currentOrbitTarget === null;
@@ -901,7 +901,6 @@ function sanitizeDownloadBaseName(filename: string): string {
 function exportSelectedFileAsHtml(): void {
     const selectedFile = getSelectedFile();
     if (selectedFile === undefined) return;
-    if (isLoading) return;
 
     const params = new URLSearchParams({
         fov: String(fovDeg),
