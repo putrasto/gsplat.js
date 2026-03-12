@@ -883,7 +883,7 @@ async function fetchBlobWithProgress(url: string, onProgress: (progress: number)
         onProgress(0.95);
     }
 
-    return new Blob(chunks, { type: contentType });
+    return new Blob(chunks as BlobPart[], { type: contentType });
 }
 
 function sanitizeDownloadBaseName(filename: string): string {
